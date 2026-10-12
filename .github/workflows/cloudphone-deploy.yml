@@ -42,6 +42,73 @@ jobs:
         echo "[INFO] Disk after cleanup:"
         df -h / | tail -1
 
+    - name: Normalize Runner Host (secure_path Compliance)
+      run: |
+        echo "[INFO] Hosted runner images ship /usr/local/bin 0777 AND run 'chmod -R 777"
+        echo "[INFO] /usr/local/lib/node_modules' (runner-images issue #267). The platform"
+        echo "[INFO] secure_path() rejects group/other-writable FILES as well as dirs -"
+        echo "[INFO] including /usr/local/bin/node itself and npm's resolved module tree."
+        echo "[INFO] Pre-fix state:"
+        ls -ld /usr/local /usr/local/bin /usr/local/bin/node /usr/local/bin/npm /usr/local/lib /usr/local/lib/node_modules /opt /usr/bin /srv 2>/dev/null || true
+        FAIL=0
+        heal_dir() {
+          if [ ! -d "$1" ]; then
+            echo "[FIX] $1 missing - creating root-owned 0755 directory."
+            sudo install -d -o root -g root -m 0755 "$1"
+          else
+            sudo chown root:root "$1" 2>/dev/null || true
+            sudo chmod 0755 "$1" 2>/dev/null || true
+          fi
+        }
+        BASE_DIRS="/usr/local /usr/local/bin /usr/local/lib /opt /usr/bin /var /var/lib /etc /etc/systemd /etc/systemd/system /srv"
+        for P in $BASE_DIRS; do heal_dir "$P" || { echo "[ERROR] Heal failed for $P"; FAIL=1; }; done
+        echo "[FIX] Repairing /usr/local/lib/node_modules tree (root-owned, strip group/other write)..."
+        if [ -d /usr/local/lib/node_modules ]; then
+          sudo chown -R root:root /usr/local/lib/node_modules
+          sudo chmod -R go-w /usr/local/lib/node_modules
+        fi
+        echo "[FIX] Strip group/other write from every binary in /usr/local/bin (node/npm are 0777)..."
+        sudo chmod go-w /usr/local/bin/* 2>/dev/null || true
+        echo "[INFO] Verifying with an exact mirror of the installer's secure_path()..."
+        verify_secure_path() {
+          P=$(readlink -e -- "$1" 2>/dev/null) || { echo "[ERROR] Missing/unresolvable: $1"; FAIL=1; return 1; }
+          while :; do
+            OWN=$(stat -c %u -- "$P" 2>/dev/null || echo MISSING)
+            WR=$(find "$P" -maxdepth 0 -perm /022 -print 2>/dev/null || true)
+            if [ "$OWN" != "0" ] || [ -n "$WR" ]; then
+              echo "[ERROR] secure_path would reject: $P (owner=$OWN writable=${WR:-no})"
+              FAIL=1
+              return 1
+            fi
+            echo "[OK] $P compliant"
+            [ "$P" != "/" ] || return 0
+            P=$(dirname -- "$P")
+          done
+          return 0
+        }
+        for P in /usr/bin /usr/local/bin /opt /srv; do verify_secure_path "$P" || FAIL=1; done
+        INSTALLER_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        NODE_BIN=$(PATH="$INSTALLER_PATH" command -v node 2>/dev/null || true)
+        NPM_BIN=$(PATH="$INSTALLER_PATH" command -v npm 2>/dev/null || true)
+        echo "[INFO] Installer sanitized PATH resolves: node=${NODE_BIN:-<none>} npm=${NPM_BIN:-<none>}"
+        [ -z "$NODE_BIN" ] || { verify_secure_path "$NODE_BIN" || FAIL=1; }
+        [ -z "$NPM_BIN" ] || { verify_secure_path "$NPM_BIN" || FAIL=1; }
+        if [ -d /usr/local/lib/node_modules ]; then
+          BAD=$(find /usr/local/lib/node_modules \( ! -user root -o \( ! -type l -perm /022 \) \) -print -quit 2>/dev/null || true)
+          if [ -n "$BAD" ]; then
+            echo "[ERROR] node_modules tree still unsafe at: $BAD"
+            FAIL=1
+          else
+            echo "[OK] /usr/local/lib/node_modules tree fully root-owned and non-writable"
+          fi
+        fi
+        if [ "$FAIL" != "0" ]; then
+          echo "[ERROR] Host normalization failed - installer would reject this host."
+          exit 1
+        fi
+        echo "[OK] Runner host normalized - installer secure_path/check_paths will pass."
+
+
     - name: Download Official Bootstrap (Checksum-Pinned Installer)
       run: |
         echo "[INFO] Downloading bootstrap.sh from Silence-X-Proton/cloudphone-platform..."
