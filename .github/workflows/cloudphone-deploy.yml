@@ -36,7 +36,7 @@ jobs:
           set +x
           umask 077
           [[ $EUID = 0 ]] || { echo 'Namespace acquisition requires root'; exit 1; }
-          [[ 'd6fc74e4d9d979a0eb7a6a41f715ecf1' =~ ^[A-Za-z0-9_-]{1,128}$ ]] || { echo 'Invalid deployment identity'; exit 1; }
+          [[ 'd7b39a397c9b84e6d277ae5a7adb8b4e' =~ ^[A-Za-z0-9_-]{1,128}$ ]] || { echo 'Invalid deployment identity'; exit 1; }
           # Parent MUST define this trusted function in this same root shell immediately
           # before this fragment. Its body embeds namespace-check.py verbatim in a quoted
           # here-doc to: /usr/bin/timeout --signal=KILL 35s /usr/bin/python3 -I -B - --check
@@ -56,7 +56,7 @@ jobs:
           chown 0:0 /run/cloudphone-job-budget
           # Never truncate a competing owner. Failure leaves unowned evidence for manual
           # inspection rather than deleting a potentially foreign directory or marker.
-          (set -o noclobber; printf '%s\n' 'd6fc74e4d9d979a0eb7a6a41f715ecf1' > /run/cloudphone-job-budget/owner)
+          (set -o noclobber; printf '%s\n' 'd7b39a397c9b84e6d277ae5a7adb8b4e' > /run/cloudphone-job-budget/owner)
           chown 0:0 /run/cloudphone-job-budget/owner
           chmod 0600 /run/cloudphone-job-budget/owner
 
@@ -183,7 +183,7 @@ jobs:
           [ "$(stat -c %u:%g:%a "$budget")" = 0:0:700 ]
           [ -f "$budget/owner" ] && [ ! -L "$budget/owner" ]
           [ "$(stat -c %u:%g:%a:%h "$budget/owner")" = 0:0:600:1 ]
-          [ "$(cat "$budget/owner")" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat "$budget/owner")" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           cd "$budget"
           cat > cleanup.sh <<'CP_CLEANUP'
           #!/usr/bin/env bash
@@ -198,7 +198,7 @@ jobs:
           fi
           # No Node dependency before installation. GNU timeout caps this entire invocation,
           # including shared-lock acquisition; helper command trees have their own caps.
-          /usr/bin/timeout --signal=KILL 210s /usr/bin/python3 -I -B /run/cloudphone-job-budget/recovery-fence.py 'd6fc74e4d9d979a0eb7a6a41f715ecf1'
+          /usr/bin/timeout --signal=KILL 210s /usr/bin/python3 -I -B /run/cloudphone-job-budget/recovery-fence.py 'd7b39a397c9b84e6d277ae5a7adb8b4e'
           cleanup_status=$?
           if (( cleanup_status != 0 )); then
             printf '{"schema":1,"ok":false,"failures":[{"phase":"cleanup-process-failed","exitCode":%d}]}\n' "$cleanup_status"
@@ -264,7 +264,7 @@ jobs:
           [ "$(stat -c %u:%g:%a "$budget")" = 0:0:700 ]
           [ -f "$budget/owner" ] && [ ! -L "$budget/owner" ]
           [ "$(stat -c %u:%g:%a:%h "$budget/owner")" = 0:0:600:1 ]
-          [ "$(cat "$budget/owner")" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat "$budget/owner")" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           systemd-run --quiet --unit=cloudphone-job-deadline --property=Restart=no --property=Type=exec --property=TimeoutStopSec=4s /bin/bash "$budget/deadline-guard.sh"
           /usr/bin/timeout --signal=KILL 5s /bin/bash -se <<'CP_HANDSHAKE'
           set -euo pipefail
@@ -301,9 +301,11 @@ jobs:
         run: |
           echo "[INFO] Disk before cleanup:"
           df -h / | tail -1
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup 2>/dev/null || true
-          sudo rm -rf /opt/hostedtoolcache/CodeQL /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy /opt/hostedtoolcache/Ruby 2>/dev/null || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/az /opt/microsoft /usr/local/aws-cli /usr/local/share/boost /usr/share/swift /usr/share/miniconda /usr/lib/R 2>/dev/null || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/Python /opt/hostedtoolcache/Java_* 2>/dev/null || true
           sudo docker image prune -a -f >/dev/null 2>&1 || true
+          sudo apt-get clean >/dev/null 2>&1 || true
+          sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
           echo "[INFO] Disk after cleanup:"
           df -h / | tail -1
       - name: Normalize Runner Host (secure_path Compliance)
@@ -371,6 +373,29 @@ jobs:
             exit 1
           fi
           echo "[OK] Runner host normalized - secure_path normalization complete; official preflight still required."
+      - name: Replace Runner Node with Pinned 22 LTS
+        run: |
+          set -euo pipefail
+          set +x
+          sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/bin/node /usr/bin/npm
+          sudo rm -rf /usr/local/lib/node_modules
+          sudo mkdir -p /opt/cloudphone-node
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 --connect-timeout 30 --max-time 1800 https://nodejs.org/dist/v22.23.3/SHASUMS256.txt -o "$work/SHASUMS256.txt"
+          official=$(awk -v f=node-v22.23.3-linux-x64.tar.xz '$2==f{print $1}' "$work/SHASUMS256.txt")
+          [ "$official" = df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de ] || { echo 'Node checksum pin mismatch'; exit 1; }
+          curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 --connect-timeout 30 --max-time 1800 https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz -o "$work/node.tar.xz"
+          printf '%s  %s\n' df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de "$work/node.tar.xz" | sha256sum --check --status || { echo 'Node archive checksum mismatch'; exit 1; }
+          sudo tar --extract --xz --file "$work/node.tar.xz" --directory /opt/cloudphone-node --no-same-owner
+          sudo sh -c 'printf "%s\n" df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de > /opt/cloudphone-node/node-v22.23.3-linux-x64/.cloudphone-node-sha256'
+          sudo chown -R root:root /opt/cloudphone-node
+          sudo chmod -R go-w /opt/cloudphone-node
+          sudo chmod 0755 /opt/cloudphone-node /opt/cloudphone-node/node-v22.23.3-linux-x64
+          sudo ln -sT /opt/cloudphone-node/node-v22.23.3-linux-x64/bin/node /usr/bin/node
+          sudo ln -sT /opt/cloudphone-node/node-v22.23.3-linux-x64/lib/node_modules/npm/bin/npm-cli.js /usr/bin/npm
+          node --version
+          npm --version
       - name: Stage Pinned Local Helpers (reviewed base 9ef01ceb48459bcc0a539dbb1364fc766cbbde71)
         run: |
           set -euo pipefail
@@ -393,15 +418,15 @@ jobs:
           chmod 0600 staged-source.py
           cat > access-public.pem <<'CP_PUBLIC_KEY'
           -----BEGIN PUBLIC KEY-----
-          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApSF/0tYdbDsggSPBATgz
-          zvjkriIgUmzsxPZRXTJLmb2rZfYsTVg6V6wckDsyXyiEEdEwH5GYa3w1aFfMwVpB
-          EyLrsqCbYI2nZ76ATNiO5hDxHI3fXVwUoINwiVTs5hD2HVYEcyrWXaSkICPcHiQx
-          Nt6nogVg4elksN9Kqe0sXBWs6KDUvwhPE5Tdd+NEmSaQ5SeOQZ7EEb146A1fWA21
-          R3p2vGAO0vCDujNcGVRVGLeOljIs1I2msjUDZuLjWBzCt042b8DUwYEGvfosO4mf
-          5J7KA93+MtDCqGcPvqLvY7+gnYg5gTx7Tjr/hofnGVCOvwkz/hbjwqqAayoAUvMA
-          h9aXoayy1zq5ZAfMEElDpbU23owFi/WLkK/cIhGMbgPAfGM4Od9QSpWxjO1HETsh
-          RqSp/X8GIw2WJdi6X/dLaV6oXr99LriHkxWWlnuALj8Zlf0KpXvZrJ/P2s46iCjL
-          P/bzasptW4PU5mNuepWrMkjeb0LDpGXlTAfqXPjZdgF/AgMBAAE=
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA4QPmozWTVGFD+Uo0waUI
+          M2BQ2vrz5RFMT+kZnIe3UUwIgYidz2Bv3OVEM+2rTaLMv9KSy+z0uGk5MpRe37Rw
+          NicbtiXocwRy40qKBfE0i9lPhAcHef9fYjqXBhqvmILn7WwO1AVcVw9JenQzQaxc
+          s977bygerTA6Ts1ZTKggOahdX839wIDKWxw/Uyp7LRjdx4msPkHOQXUe/dAwlEWf
+          0/fb1rYmQCDpEX93LzDtC3JTydkHpF9rf8Jv7qbm27WeBgejTGSHe05jz/LqI7gu
+          IKh/sKKpLhxjifA/Y9u1AgtJxDeZdI6eh9wqxJJArWcWwKa6CCRXeytzD5Tf3rrG
+          vnhQbDQ5EYpXRp6pZJo11I+bGbFIIMRDhOU+Qr6MlXzNIRJEW6n+258L0bbFOzLh
+          ENGBmHBs3wfixeoXGCckp3jA496gS0jB7Ohr7mRrrEmUALNQO04/T+aNHia4Z7S7
+          xRdFsqrFZS/t2G3fw77K5jpC8iQ1pYRJHR239EnhOA+LAgMBAAE=
           -----END PUBLIC KEY-----
           CP_PUBLIC_KEY
           chmod 0644 access-public.pem
@@ -774,7 +799,7 @@ jobs:
           [ "$(stat -c %u:%g:%a "$budget")" = 0:0:700 ]
           [ -f "$budget/owner" ] && [ ! -L "$budget/owner" ]
           [ "$(stat -c %u:%g:%a:%h "$budget/owner")" = 0:0:600:1 ]
-          [ "$(cat "$budget/owner")" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat "$budget/owner")" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           cd /run/cloudphone-public-test
           cat > cloudflare-overlay.b64 <<'CP_OVERLAY_CHUNK'
           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
@@ -797,7 +822,7 @@ jobs:
           [ "$(stat -c %u:%g:%a "$budget")" = 0:0:700 ]
           [ -f "$budget/owner" ] && [ ! -L "$budget/owner" ]
           [ "$(stat -c %u:%g:%a:%h "$budget/owner")" = 0:0:600:1 ]
-          [ "$(cat "$budget/owner")" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat "$budget/owner")" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           cd /run/cloudphone-public-test
           cat >> cloudflare-overlay.b64 <<'CP_OVERLAY_CHUNK'
           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
@@ -820,7 +845,7 @@ jobs:
           [ "$(stat -c %u:%g:%a "$budget")" = 0:0:700 ]
           [ -f "$budget/owner" ] && [ ! -L "$budget/owner" ]
           [ "$(stat -c %u:%g:%a:%h "$budget/owner")" = 0:0:600:1 ]
-          [ "$(cat "$budget/owner")" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat "$budget/owner")" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           cd /run/cloudphone-public-test
           base64 --decode cloudflare-overlay.b64 | gzip --decompress > cloudflare-overlay.json
           chown root:root cloudflare-overlay.json
@@ -890,13 +915,18 @@ jobs:
             echo '[OK] Installer completed successfully; managed services and tunnel created by installer.'
           else
             echo '::error::Installation failed; raw output retained root-only, not copied to public logs.'
+            echo '[INFO] Installer failure summary (sanitized):'
+            sudo df -h /opt | tail -1 || true
+            sudo grep -E '^"(check|ok|detail)"' /run/cloudphone-public-test/install.log 2>/dev/null | tail -90 || true
+            sudo grep -B1 -A2 '"ok": false' /run/cloudphone-public-test/install.log 2>/dev/null | tail -40 || true
+            sudo grep -E '^(ERROR|E:)' /run/cloudphone-public-test/install.log 2>/dev/null | tail -30 || true
             [[ $EUID = 0 ]] || exit 1
           budget=/run/cloudphone-job-budget
           [ -d "$budget" ] && [ ! -L "$budget" ]
           [ "$(stat -c %u:%g:%a "$budget")" = 0:0:700 ]
           [ -f "$budget/owner" ] && [ ! -L "$budget/owner" ]
           [ "$(stat -c %u:%g:%a:%h "$budget/owner")" = 0:0:600:1 ]
-          [ "$(cat "$budget/owner")" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat "$budget/owner")" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           for helper in cleanup.sh recovery-fence.py recovery.mjs; do
             [ -f "$budget/$helper" ] && [ ! -L "$budget/$helper" ]
             [ "$(stat -c %u:%g:%a:%h "$budget/$helper")" = 0:0:600:1 ]
@@ -1032,7 +1062,7 @@ jobs:
           CP_COLLECT_GZIP
           chown root:root collect-access.cjs
           chmod 0600 collect-access.cjs
-          CP_TUNNEL_TYPE=cloudflare CP_MODE=dashboard CP_PORT=8790 CP_REPOSITORY='${{ github.repository }}' CP_RUN_ID='${{ github.run_id }}' CP_ATTEMPT='${{ github.run_attempt }}' CP_DEPLOYMENT_ID=d6fc74e4d9d979a0eb7a6a41f715ecf1 node collect-access.cjs
+          CP_TUNNEL_TYPE=cloudflare CP_MODE=dashboard CP_PORT=8790 CP_REPOSITORY='${{ github.repository }}' CP_RUN_ID='${{ github.run_id }}' CP_ATTEMPT='${{ github.run_attempt }}' CP_DEPLOYMENT_ID=d7b39a397c9b84e6d277ae5a7adb8b4e node collect-access.cjs
           CP_ROOT
         id: prepare_access
       - name: Failure Diagnostics (no raw journal messages)
@@ -1044,7 +1074,7 @@ jobs:
           set -euo pipefail
           [ -f /run/cloudphone-job-budget/owner ] && [ ! -L /run/cloudphone-job-budget/owner ]
           [ "$(stat -c %u:%a /run/cloudphone-job-budget/owner)" = 0:600 ]
-          [ "$(cat /run/cloudphone-job-budget/owner)" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat /run/cloudphone-job-budget/owner)" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           CP_OWNERSHIP
           set -euo pipefail
           for unit in cloudphone-platform.service cloudphone-platform-broker.service cloudphone-platform-tunnel.service cloudphone-platform-origin.service; do
@@ -1067,7 +1097,7 @@ jobs:
           set -euo pipefail
           [ -f /run/cloudphone-job-budget/owner ] && [ ! -L /run/cloudphone-job-budget/owner ]
           [ "$(stat -c %u:%a /run/cloudphone-job-budget/owner)" = 0:600 ]
-          [ "$(cat /run/cloudphone-job-budget/owner)" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat /run/cloudphone-job-budget/owner)" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           CP_OWNERSHIP
           set -euo pipefail
           set +x
@@ -1080,15 +1110,15 @@ jobs:
           mkdir -m 0700 "$work/bundle" "$work/bundle/logs" "$work/bundle/systemd"
           cat > "$work/access-public.pem" <<'CP_PUBLIC_KEY'
           -----BEGIN PUBLIC KEY-----
-          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApSF/0tYdbDsggSPBATgz
-          zvjkriIgUmzsxPZRXTJLmb2rZfYsTVg6V6wckDsyXyiEEdEwH5GYa3w1aFfMwVpB
-          EyLrsqCbYI2nZ76ATNiO5hDxHI3fXVwUoINwiVTs5hD2HVYEcyrWXaSkICPcHiQx
-          Nt6nogVg4elksN9Kqe0sXBWs6KDUvwhPE5Tdd+NEmSaQ5SeOQZ7EEb146A1fWA21
-          R3p2vGAO0vCDujNcGVRVGLeOljIs1I2msjUDZuLjWBzCt042b8DUwYEGvfosO4mf
-          5J7KA93+MtDCqGcPvqLvY7+gnYg5gTx7Tjr/hofnGVCOvwkz/hbjwqqAayoAUvMA
-          h9aXoayy1zq5ZAfMEElDpbU23owFi/WLkK/cIhGMbgPAfGM4Od9QSpWxjO1HETsh
-          RqSp/X8GIw2WJdi6X/dLaV6oXr99LriHkxWWlnuALj8Zlf0KpXvZrJ/P2s46iCjL
-          P/bzasptW4PU5mNuepWrMkjeb0LDpGXlTAfqXPjZdgF/AgMBAAE=
+          MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA4QPmozWTVGFD+Uo0waUI
+          M2BQ2vrz5RFMT+kZnIe3UUwIgYidz2Bv3OVEM+2rTaLMv9KSy+z0uGk5MpRe37Rw
+          NicbtiXocwRy40qKBfE0i9lPhAcHef9fYjqXBhqvmILn7WwO1AVcVw9JenQzQaxc
+          s977bygerTA6Ts1ZTKggOahdX839wIDKWxw/Uyp7LRjdx4msPkHOQXUe/dAwlEWf
+          0/fb1rYmQCDpEX93LzDtC3JTydkHpF9rf8Jv7qbm27WeBgejTGSHe05jz/LqI7gu
+          IKh/sKKpLhxjifA/Y9u1AgtJxDeZdI6eh9wqxJJArWcWwKa6CCRXeytzD5Tf3rrG
+          vnhQbDQ5EYpXRp6pZJo11I+bGbFIIMRDhOU+Qr6MlXzNIRJEW6n+258L0bbFOzLh
+          ENGBmHBs3wfixeoXGCckp3jA496gS0jB7Ohr7mRrrEmUALNQO04/T+aNHia4Z7S7
+          xRdFsqrFZS/t2G3fw77K5jpC8iQ1pYRJHR239EnhOA+LAgMBAAE=
           -----END PUBLIC KEY-----
           CP_PUBLIC_KEY
           chmod 0644 "$work/access-public.pem"
@@ -1336,7 +1366,7 @@ jobs:
           [ "$(stat -c %u:%g:%a "$budget")" = 0:0:700 ]
           [ -f "$budget/owner" ] && [ ! -L "$budget/owner" ]
           [ "$(stat -c %u:%g:%a:%h "$budget/owner")" = 0:0:600:1 ]
-          [ "$(cat "$budget/owner")" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat "$budget/owner")" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           for helper in cleanup.sh recovery-fence.py recovery.mjs; do
             [ -f "$budget/$helper" ] && [ ! -L "$budget/$helper" ]
             [ "$(stat -c %u:%g:%a:%h "$budget/$helper")" = 0:0:600:1 ]
@@ -1382,7 +1412,7 @@ jobs:
           [ "$(stat -c %u:%g:%a "$budget")" = 0:0:700 ]
           [ -f "$budget/owner" ] && [ ! -L "$budget/owner" ]
           [ "$(stat -c %u:%g:%a:%h "$budget/owner")" = 0:0:600:1 ]
-          [ "$(cat "$budget/owner")" = 'd6fc74e4d9d979a0eb7a6a41f715ecf1' ]
+          [ "$(cat "$budget/owner")" = 'd7b39a397c9b84e6d277ae5a7adb8b4e' ]
           for helper in cleanup.sh recovery-fence.py recovery.mjs; do
             [ -f "$budget/$helper" ] && [ ! -L "$budget/$helper" ]
             [ "$(stat -c %u:%g:%a:%h "$budget/$helper")" = 0:0:600:1 ]
